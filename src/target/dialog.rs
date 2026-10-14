@@ -5,16 +5,11 @@ use crate::platform::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use windows::Win32::Foundation::*;
-use windows::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-use windows::Win32::System::Memory::*;
-use windows::Win32::System::Threading::*;
-use windows::Win32::UI::Controls::Dialogs::CDM_GETFOLDERPATH;
 use windows::Win32::UI::Input::KeyboardAndMouse::VK_RETURN;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const ID_FILENAME_COMBO: i32 = 0x47C; // cmb13
 const ID_FILENAME_EDIT: i32 = 0x480; // edt1
-const ID_LOOKIN: i32 = 0x471; // cmb2 (classic dialogs only)
 
 /// Localized "File name" labels (lower-case, '&' stripped).
 const FILENAME_LABELS: &[&str] = &[
@@ -115,44 +110,9 @@ pub fn current_dir(root: HWND) -> Option<String> {
             }
         }
     }
-    // Classic common dialog: ask it directly (only when it really is one —
-    // CDM_* values collide with arbitrary WM_USER messages elsewhere).
-    if class_name(root) == "#32770" && kids.iter().any(|&h| ctrl_id(h) == ID_LOOKIN) {
-        if let Some(d) = cdm_folder_path(root) {
-            return Some(d);
-        }
-    }
+    // Classic dialogs have no readable path control; the caller falls back to
+    // UI Automation (no cross-process memory access, which EDR flags).
     None
-}
-
-fn cdm_folder_path(root: HWND) -> Option<String> {
-    const CAP: usize = 1024;
-    unsafe {
-        let proc = OpenProcess(PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE, false, window_pid(root)).ok()?;
-        let mem = VirtualAllocEx(proc, None, CAP * 2, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-        let mut out = None;
-        if !mem.is_null() {
-            let mut r = 0usize;
-            SendMessageTimeoutW(
-                root,
-                CDM_GETFOLDERPATH,
-                WPARAM(CAP),
-                LPARAM(mem as isize),
-                SMTO_ABORTIFHUNG,
-                500,
-                Some(&mut r),
-            );
-            if (r as isize) > 1 {
-                let mut buf = vec![0u16; CAP];
-                if ReadProcessMemory(proc, mem, buf.as_mut_ptr() as *mut _, CAP * 2, None).is_ok() {
-                    out = existing_dir(&from_wide(&buf));
-                }
-            }
-            let _ = VirtualFreeEx(proc, mem, 0, MEM_RELEASE);
-        }
-        let _ = CloseHandle(proc);
-        out
-    }
 }
 
 fn press_ok(root: HWND, edit: HWND) {
@@ -244,18 +204,10 @@ mod tests {
         assert_eq!(t.kind, crate::target::Kind::Dialog);
         let edit = find_filename_edit(root).expect("filename edit");
         set_window_text(edit, "keep-me.txt");
-        assert_eq!(current_dir(root).as_deref(), Some(r"C:\Windows\Web"));
-        assert!(navigate(root, r"C:\Windows\Media", false));
-        let mut d = None;
-        for _ in 0..40 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            d = current_dir(root);
-            if d.as_deref() == Some(r"C:\Windows\Media") {
-                break;
-            }
-        }
-        assert_eq!(d.as_deref(), Some(r"C:\Windows\Media"));
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Classic dialogs expose no readable path; Target falls back to the last jump.
+        assert!(t.go(r"C:\Windows\Media", false));
+        assert_eq!(t.current_dir().as_deref(), Some(r"C:\Windows\Media"));
+        std::thread::sleep(std::time::Duration::from_millis(550));
         assert_eq!(window_text(edit), "keep-me.txt", "typed filename restored");
         unsafe {
             let _ = PostMessageW(Some(root), WM_COMMAND, WPARAM(IDCANCEL.0 as usize), LPARAM(0));

@@ -2,6 +2,7 @@
 
 use std::path::Path;
 use windows::Win32::Foundation::*;
+use windows::Win32::System::Com::*;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::Threading::*;
 use windows::Win32::UI::Shell::*;
@@ -113,23 +114,44 @@ pub fn system_uses_light_theme() -> bool {
     r.is_ok() && v == 1
 }
 
-const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+/// `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Tachyon.lnk`
+fn startup_link() -> Option<std::path::PathBuf> {
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_Startup, KF_FLAG_DEFAULT, None).ok()?;
+        let dir = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        Some(Path::new(&dir?).join("Tachyon.lnk"))
+    }
+}
 
+/// Start with Windows via a Startup-folder shortcut (a Run-key entry from an
+/// unsigned exe is a classic EDR trigger; a visible shortcut is not).
 pub fn set_autostart(on: bool) {
     unsafe {
-        if on {
-            let exe = std::env::current_exe().unwrap_or_default();
-            let val = wide(&format!("\"{}\"", exe.display()));
-            let _ = RegSetKeyValueW(
-                HKEY_CURRENT_USER,
-                RUN_KEY,
-                w!("Tachyon"),
-                REG_SZ.0,
-                Some(val.as_ptr() as *const _),
-                (val.len() * 2) as u32,
-            );
-        } else {
-            let _ = RegDeleteKeyValueW(HKEY_CURRENT_USER, RUN_KEY, w!("Tachyon"));
+        // Clean up the Run value written by earlier versions.
+        let _ = RegDeleteKeyValueW(
+            HKEY_CURRENT_USER,
+            w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            w!("Tachyon"),
+        );
+        let Some(lnk) = startup_link() else { return };
+        if !on {
+            let _ = std::fs::remove_file(&lnk);
+            return;
+        }
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let Ok(link) = CoCreateInstance::<_, IShellLinkW>(&ShellLink, None, CLSCTX_INPROC_SERVER) else { return };
+        let exe = std::env::current_exe().unwrap_or_default();
+        let exe_w = wide(&exe.to_string_lossy());
+        let _ = link.SetPath(PCWSTR(exe_w.as_ptr()));
+        if let Some(dir) = exe.parent() {
+            let d = wide(&dir.to_string_lossy());
+            let _ = link.SetWorkingDirectory(PCWSTR(d.as_ptr()));
+        }
+        let _ = link.SetDescription(w!("Tachyon"));
+        if let Ok(pf) = link.cast::<IPersistFile>() {
+            let l = wide(&lnk.to_string_lossy());
+            let _ = pf.Save(PCWSTR(l.as_ptr()), true);
         }
     }
 }

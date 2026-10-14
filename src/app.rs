@@ -472,6 +472,10 @@ pub fn main_loop() -> Result<()> {
         if !Config::file().exists() {
             let _ = cfg.save();
         }
+        if cfg.settings.autostart {
+            // Migrates older Run-key installs and follows the exe if it moved.
+            crate::platform::set_autostart(true);
+        }
         let gfx = Gfx::new()?;
         APP.with(|a| *a.borrow_mut() = Some(App { cfg, gfx, menu: None, exists: HashMap::new() }));
         // Warm caches so the very first popup is as fast as the rest.

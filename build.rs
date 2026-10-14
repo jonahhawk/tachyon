@@ -34,7 +34,6 @@ fn minify(svg: &str) -> String {
 fn main() {
     println!("cargo:rerun-if-changed=assets/icons");
     println!("cargo:rerun-if-changed=assets/tachyon.ico");
-    println!("cargo:rerun-if-changed=assets/tachyon.rc");
     println!("cargo:rerun-if-changed=assets/tachyon.manifest");
 
     let root = Path::new("assets/icons");
@@ -80,12 +79,53 @@ fn main() {
     fs::write(Path::new(&out_dir).join("icons.pak"), out).unwrap();
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
-        let rc = if Path::new("assets/tachyon.ico").exists() {
-            "assets/tachyon.rc"
-        } else {
-            "assets/tachyon-noicon.rc"
-        };
-        embed_resource::compile(rc, embed_resource::NONE)
+        // Generated .rc: icon + manifest + VERSIONINFO (SignPath requires
+        // product name/version metadata on signed binaries).
+        let assets = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap()).join("assets");
+        let esc = |p: &Path| p.display().to_string().replace('\\', "\\\\");
+        let mut rc = String::new();
+        if assets.join("tachyon.ico").exists() {
+            rc += &format!("1 ICON \"{}\"\n", esc(&assets.join("tachyon.ico")));
+        }
+        rc += &format!("1 24 \"{}\"\n", esc(&assets.join("tachyon.manifest")));
+        let v = |k| env::var(k).unwrap_or_else(|_| "0".into());
+        let (maj, min, pat, ver) = (
+            v("CARGO_PKG_VERSION_MAJOR"),
+            v("CARGO_PKG_VERSION_MINOR"),
+            v("CARGO_PKG_VERSION_PATCH"),
+            v("CARGO_PKG_VERSION"),
+        );
+        rc += &format!(
+            r#"1 VERSIONINFO
+FILEVERSION {maj},{min},{pat},0
+PRODUCTVERSION {maj},{min},{pat},0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Tachyon"
+      VALUE "FileDescription", "Tachyon"
+      VALUE "FileVersion", "{ver}"
+      VALUE "InternalName", "tachyon"
+      VALUE "LegalCopyright", "Copyright (c) 2026 Jonah Hawk. MIT License."
+      VALUE "OriginalFilename", "tachyon.exe"
+      VALUE "ProductName", "Tachyon"
+      VALUE "ProductVersion", "{ver}"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END
+"#
+        );
+        let rc_path = Path::new(&out_dir).join("tachyon.rc");
+        fs::write(&rc_path, rc).unwrap();
+        embed_resource::compile(&rc_path, embed_resource::NONE)
             .manifest_optional()
             .unwrap();
     }
