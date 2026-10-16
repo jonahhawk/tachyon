@@ -10,9 +10,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 #[derive(PartialEq, Clone, Copy)]
 enum Page {
+    Shortcuts,
     Appearance,
     Behavior,
-    Shortcuts,
     About,
 }
 
@@ -469,9 +469,9 @@ impl eframe::App for SettingsApp {
             ui.label(egui::RichText::new("tachyon").size(20.0).color(rgb(self.cfg.settings.palette().accent)));
             ui.add_space(14.0);
             for (p, l) in [
+                (Page::Shortcuts, "Shortcuts"),
                 (Page::Appearance, "Appearance"),
                 (Page::Behavior, "Behavior"),
-                (Page::Shortcuts, "Shortcuts"),
                 (Page::About, "About"),
             ] {
                 ui.add_sized([130.0, 28.0], egui::Button::selectable(self.page == p, l)).clicked().then(|| self.page = p);
@@ -481,9 +481,9 @@ impl eframe::App for SettingsApp {
             egui::ScrollArea::vertical().id_salt("page").show(ui, |ui| {
                 ui.add_space(6.0);
                 match self.page {
+                    Page::Shortcuts => self.shortcuts(ui),
                     Page::Appearance => self.appearance(ui),
                     Page::Behavior => self.behavior(ui),
-                    Page::Shortcuts => self.shortcuts(ui),
                     Page::About => self.about(ui),
                 }
             });
@@ -504,7 +504,7 @@ pub fn run(args: &[String]) {
         }
         _ => None,
     };
-    let page = if picker.is_some() { Page::Shortcuts } else { Page::Appearance };
+    let page = Page::Shortcuts;
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(SETTINGS_TITLE)
         .with_inner_size([780.0, 560.0])
